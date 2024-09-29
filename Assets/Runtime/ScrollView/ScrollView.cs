@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="ScrollView.cs" company="AillieoTech">
 // Copyright (c) AillieoTech. All rights reserved.
 // </copyright>
@@ -17,17 +17,14 @@ namespace AillieoUtils
     [DisallowMultipleComponent]
     public class ScrollView : ScrollRect
     {
-        [Tooltip("默认item尺寸")]
-        public Vector2 defaultItemSize;
+        [Tooltip("默认item尺寸")] public Vector2 defaultItemSize;
 
-        [Tooltip("item的模板")]
-        public RectTransform itemTemplate;
+        [Tooltip("item的模板")] public RectTransform itemTemplate;
 
         // 0001
         protected const int flagScrollDirection = 1;
 
-        [SerializeField]
-        [FormerlySerializedAs("m_layoutType")]
+        [SerializeField] [FormerlySerializedAs("m_layoutType")]
         protected ItemLayoutType layoutType = ItemLayoutType.Vertical;
 
         // 只保存4个临界index
@@ -35,7 +32,7 @@ namespace AillieoUtils
 
         // callbacks for items
         protected Action<int, RectTransform> updateFunc;
-        protected Func<int, Vector2> itemSizeFunc;
+        protected Func<int, RectTransform, Vector2> itemSizeFunc;
         protected Func<int> itemCountFunc;
         protected Func<int, RectTransform> itemGetFunc;
         protected Action<RectTransform> itemRecycleFunc;
@@ -49,8 +46,7 @@ namespace AillieoUtils
 
         private int dataCount = 0;
 
-        [Tooltip("初始化时池内item数量")]
-        [SerializeField]
+        [Tooltip("初始化时池内item数量")] [SerializeField]
         private int poolSize;
 
         // status
@@ -66,10 +62,20 @@ namespace AillieoUtils
         public enum ItemLayoutType
         {
             // 最后一位表示滚动方向
-            Vertical = 0b0001,                   // 0001
-            Horizontal = 0b0010,                 // 0010
-            VerticalThenHorizontal = 0b0100,     // 0100
-            HorizontalThenVertical = 0b0101,     // 0101
+            Vertical = 0b0001, // 0001
+            Horizontal = 0b0010, // 0010
+            VerticalThenHorizontal = 0b0100, // 0100
+            HorizontalThenVertical = 0b0101, // 0101
+        }
+
+        public bool IsCenter;
+
+        private Vector2 startPosition;
+
+        public Vector2 StartPosition
+        {
+            get => startPosition;
+            set { startPosition = value; }
         }
 
         public virtual void SetUpdateFunc(Action<int, RectTransform> func)
@@ -77,7 +83,7 @@ namespace AillieoUtils
             this.updateFunc = func;
         }
 
-        public virtual void SetItemSizeFunc(Func<int, Vector2> func)
+        public virtual void SetItemSizeFunc(Func<int, RectTransform, Vector2> func)
         {
             this.itemSizeFunc = func;
         }
@@ -107,6 +113,16 @@ namespace AillieoUtils
             this.SetItemSizeFunc(null);
             this.SetItemCountFunc(null);
             this.SetItemGetAndRecycleFunc(null, null);
+        }
+
+        public ScrollItemWithRect GetScrollItemWithRect(int index)
+        {
+            if (managedItems.Count <= index)
+            {
+                return null;
+            }
+
+            return managedItems[index];
         }
 
         public void UpdateData(bool immediately = true)
@@ -152,6 +168,11 @@ namespace AillieoUtils
 
         protected override void OnEnable()
         {
+            if (defaultItemSize == Vector2.zero && itemTemplate != null)
+            {
+                defaultItemSize = itemTemplate.sizeDelta;
+            }
+
             base.OnEnable();
             if (this.willUpdateData != 0)
             {
@@ -222,8 +243,8 @@ namespace AillieoUtils
             ScrollItemWithRect firstItem = this.managedItems[0];
             if (firstItem.rectDirty)
             {
-                Vector2 firstSize = this.GetItemSize(0);
-                firstItem.rect = CreateWithLeftTopAndSize(Vector2.zero, firstSize);
+                Vector2 firstSize = this.GetItemSize(0, firstItem.item);
+                firstItem.rect = CreateWithLeftTopAndSize(startPosition, firstSize);
                 firstItem.rectDirty = false;
             }
 
@@ -246,7 +267,7 @@ namespace AillieoUtils
 
             for (var i = nearestClean + 1; i <= index; i++)
             {
-                size = this.GetItemSize(i);
+                size = this.GetItemSize(i, this.managedItems[i].item);
                 this.managedItems[i].rect = CreateWithLeftTopAndSize(curPos, size);
                 this.managedItems[i].rectDirty = false;
                 this.MovePos(ref curPos, size);
@@ -336,7 +357,6 @@ namespace AillieoUtils
         private IEnumerator DelayUpdateData()
         {
             yield return new WaitForEndOfFrame();
-
             this.InternalUpdateData();
         }
 
@@ -373,6 +393,42 @@ namespace AillieoUtils
 
             if (newDataCount != this.managedItems.Count)
             {
+                if (IsCenter && startPosition == Vector2.zero)
+                {
+                    switch (this.layoutType)
+                    {
+                        case ItemLayoutType.Vertical:
+                        case ItemLayoutType.VerticalThenHorizontal:
+                            float y = viewport.sizeDelta.y - newDataCount * itemTemplate.sizeDelta.y;
+                            if (y > 0)
+                            {
+                                startPosition = new Vector2(0, y / 2f);
+                            }
+                            else
+                            {
+                                startPosition = Vector2.zero;
+                            }
+
+                            break;
+                        case ItemLayoutType.Horizontal:
+                        case ItemLayoutType.HorizontalThenVertical:
+                            float x = viewport.sizeDelta.x - newDataCount * itemTemplate.sizeDelta.x;
+                            if (x > 0)
+                            {
+                                startPosition = new Vector2(x / 2f, 0);
+                            }
+                            else
+                            {
+                                startPosition = Vector2.zero;
+                            }
+
+                            break;
+                        default:
+                            startPosition = Vector2.zero;
+                            break;
+                    }
+                }
+
                 if (this.managedItems.Count < newDataCount)
                 {
                     // 增加
@@ -547,19 +603,23 @@ namespace AillieoUtils
                 if (criticalItemType == CriticalItemType.UpToHide)
                 {
                     // 最上隐藏了一个
-                    this.criticalItemIndex[criticalItemType + 2] = Mathf.Max(criticalIndex, this.criticalItemIndex[criticalItemType + 2]);
+                    this.criticalItemIndex[criticalItemType + 2] =
+                        Mathf.Max(criticalIndex, this.criticalItemIndex[criticalItemType + 2]);
                     this.criticalItemIndex[criticalItemType]++;
                 }
                 else
                 {
                     // 最下隐藏了一个
-                    this.criticalItemIndex[criticalItemType + 2] = Mathf.Min(criticalIndex, this.criticalItemIndex[criticalItemType + 2]);
+                    this.criticalItemIndex[criticalItemType + 2] =
+                        Mathf.Min(criticalIndex, this.criticalItemIndex[criticalItemType + 2]);
                     this.criticalItemIndex[criticalItemType]--;
                 }
 
-                this.criticalItemIndex[criticalItemType] = Mathf.Clamp(this.criticalItemIndex[criticalItemType], 0, this.dataCount - 1);
+                this.criticalItemIndex[criticalItemType] =
+                    Mathf.Clamp(this.criticalItemIndex[criticalItemType], 0, this.dataCount - 1);
 
-                if (this.criticalItemIndex[CriticalItemType.UpToHide] > this.criticalItemIndex[CriticalItemType.DownToHide])
+                if (this.criticalItemIndex[CriticalItemType.UpToHide] >
+                    this.criticalItemIndex[CriticalItemType.DownToHide])
                 {
                     // 偶然的情况 拖拽超出一屏
                     this.ResetCriticalItems();
@@ -586,19 +646,23 @@ namespace AillieoUtils
                 if (criticalItemType == CriticalItemType.UpToShow)
                 {
                     // 最上显示了一个
-                    this.criticalItemIndex[criticalItemType - 2] = Mathf.Min(criticalIndex, this.criticalItemIndex[criticalItemType - 2]);
+                    this.criticalItemIndex[criticalItemType - 2] =
+                        Mathf.Min(criticalIndex, this.criticalItemIndex[criticalItemType - 2]);
                     this.criticalItemIndex[criticalItemType]--;
                 }
                 else
                 {
                     // 最下显示了一个
-                    this.criticalItemIndex[criticalItemType - 2] = Mathf.Max(criticalIndex, this.criticalItemIndex[criticalItemType - 2]);
+                    this.criticalItemIndex[criticalItemType - 2] =
+                        Mathf.Max(criticalIndex, this.criticalItemIndex[criticalItemType - 2]);
                     this.criticalItemIndex[criticalItemType]++;
                 }
 
-                this.criticalItemIndex[criticalItemType] = Mathf.Clamp(this.criticalItemIndex[criticalItemType], 0, this.dataCount - 1);
+                this.criticalItemIndex[criticalItemType] =
+                    Mathf.Clamp(this.criticalItemIndex[criticalItemType], 0, this.dataCount - 1);
 
-                if (this.criticalItemIndex[CriticalItemType.UpToShow] >= this.criticalItemIndex[CriticalItemType.DownToShow])
+                if (this.criticalItemIndex[CriticalItemType.UpToShow] >=
+                    this.criticalItemIndex[CriticalItemType.DownToShow])
                 {
                     // 偶然的情况 拖拽超出一屏
                     this.ResetCriticalItems();
@@ -619,7 +683,8 @@ namespace AillieoUtils
             }
 
             this.EnsureItemRect(index);
-            return new Rect(this.refRect.position - this.content.anchoredPosition, this.refRect.size).Overlaps(this.managedItems[index].rect);
+            return new Rect(this.refRect.position - this.content.anchoredPosition, this.refRect.size).Overlaps(
+                this.managedItems[index].rect);
         }
 
         private bool ShouldItemFullySeenAtIndex(int index)
@@ -630,7 +695,9 @@ namespace AillieoUtils
             }
 
             this.EnsureItemRect(index);
-            return this.IsRectContains(new Rect(this.refRect.position - this.content.anchoredPosition, this.refRect.size), this.managedItems[index].rect);
+            return this.IsRectContains(
+                new Rect(this.refRect.position - this.content.anchoredPosition, this.refRect.size),
+                this.managedItems[index].rect);
         }
 
         private bool IsRectContains(Rect outRect, Rect inRect, bool bothDimensions = false)
@@ -665,10 +732,7 @@ namespace AillieoUtils
             poolNode.transform.SetParent(this.transform, false);
             this.itemPool = new SimpleObjPool<RectTransform>(
                 this.poolSize,
-                (RectTransform item) =>
-                {
-                    item.transform.SetParent(poolNode.transform, false);
-                },
+                (RectTransform item) => { item.transform.SetParent(poolNode.transform, false); },
                 () =>
                 {
                     GameObject itemObj = Instantiate(this.itemTemplate.gameObject);
@@ -716,13 +780,13 @@ namespace AillieoUtils
             item.sizeDelta = r.size;
         }
 
-        private Vector2 GetItemSize(int index)
+        private Vector2 GetItemSize(int index, RectTransform item)
         {
             if (index >= 0 && index <= this.dataCount)
             {
                 if (this.itemSizeFunc != null)
                 {
-                    return this.itemSizeFunc(index);
+                    return this.itemSizeFunc(index, item);
                 }
             }
 
@@ -795,7 +859,8 @@ namespace AillieoUtils
             this.viewRect.GetWorldCorners(this.viewWorldConers);
             this.rectCorners[0] = this.content.transform.InverseTransformPoint(this.viewWorldConers[0]);
             this.rectCorners[1] = this.content.transform.InverseTransformPoint(this.viewWorldConers[2]);
-            this.refRect = new Rect((Vector2)this.rectCorners[0] - this.content.anchoredPosition, this.rectCorners[1] - this.rectCorners[0]);
+            this.refRect = new Rect((Vector2)this.rectCorners[0] - this.content.anchoredPosition,
+                this.rectCorners[1] - this.rectCorners[0]);
         }
 
         private void MovePos(ref Vector2 pos, Vector2 size)
@@ -849,7 +914,7 @@ namespace AillieoUtils
             public static byte DownToShow = 3;
         }
 
-        private class ScrollItemWithRect
+        public class ScrollItemWithRect
         {
             // scroll item 身上的 RectTransform组件
             public RectTransform item;

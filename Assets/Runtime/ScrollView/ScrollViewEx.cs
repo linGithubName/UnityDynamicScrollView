@@ -1,4 +1,4 @@
-// -----------------------------------------------------------------------
+﻿// -----------------------------------------------------------------------
 // <copyright file="ScrollViewEx.cs" company="AillieoTech">
 // Copyright (c) AillieoTech. All rights reserved.
 // </copyright>
@@ -43,14 +43,14 @@ namespace AillieoUtils
             base.SetUpdateFunc(func);
         }
 
-        public override void SetItemSizeFunc(Func<int, Vector2> func)
+        public override void SetItemSizeFunc(Func<int, RectTransform, Vector2> func)
         {
             if (func != null)
             {
                 var f = func;
-                func = (index) =>
+                func = (index,item) =>
                 {
-                    return f(index + this.startOffset);
+                    return f(index + this.startOffset,item);
                 };
             }
 
